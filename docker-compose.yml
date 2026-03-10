@@ -1,0 +1,64 @@
+# Shared Keycloak identity provider — runs once on VPS, serves all projects
+# Deployed to /opt/keycloak on the VPS
+#
+# Usage:
+#   docker compose up -d
+#
+# Requires:
+#   - External "proxy" Docker network (created by Traefik)
+#   - .env file with KEYCLOAK_ADMIN / KEYCLOAK_ADMIN_PASSWORD
+
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.2
+    container_name: keycloak
+    restart: unless-stopped
+    command: >-
+      bash -c "
+        mkdir -p /opt/keycloak/data/import &&
+        cp /opt/keycloak/realm-import/*.json /opt/keycloak/data/import/ 2>/dev/null || true &&
+        /opt/keycloak/bin/kc.sh start --import-realm
+      "
+    entrypoint: []
+    environment:
+      # Admin credentials
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      # Database — embedded H2 (default) for simplicity; swap to Postgres if needed
+      # KC_DB: postgres
+      # KC_DB_URL: jdbc:postgresql://keycloak-db:5432/keycloak
+      # KC_DB_USERNAME: ${KC_DB_USERNAME}
+      # KC_DB_PASSWORD: ${KC_DB_PASSWORD}
+      # Proxy & hostname
+      KC_HTTP_ENABLED: "true"
+      KC_PROXY_HEADERS: xforwarded
+      KC_HOSTNAME: auth.bluebraces.online
+      KC_HOSTNAME_STRICT: "true"
+      # Health
+      KC_HEALTH_ENABLED: "true"
+    volumes:
+      - keycloak-data:/opt/keycloak/data
+      - ./themes:/opt/keycloak/themes
+      - ./realms:/opt/keycloak/realm-import
+    labels:
+      # Traefik routing — auth.bluebraces.online
+      - traefik.enable=true
+      - traefik.http.routers.keycloak.rule=Host(`auth.bluebraces.online`)
+      - traefik.http.routers.keycloak.entrypoints=websecure
+      - traefik.http.routers.keycloak.tls.certresolver=letsencrypt
+      - traefik.http.services.keycloak.loadbalancer.server.port=8080
+    networks:
+      - proxy
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/9000 && echo -e 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && cat <&3 | grep -q '\"status\":\"UP\"'"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+volumes:
+  keycloak-data:
+
+networks:
+  proxy:
+    external: true
