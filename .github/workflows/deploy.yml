@@ -63,18 +63,20 @@ jobs:
             set -euo pipefail
 
             echo "Waiting for Keycloak to become healthy..."
-            for i in $(seq 1 24); do
+            echo "Note: first start after config change includes Quarkus augmentation (~2-3 min)"
+            for i in $(seq 1 60); do
               STATUS=$(docker inspect --format='{{.State.Health.Status}}' keycloak 2>/dev/null || echo "starting")
               if [ "$STATUS" = "healthy" ]; then
                 echo "Keycloak is healthy."
                 break
               fi
-              if [ "$i" -eq 24 ]; then
-                echo "ERROR: Keycloak did not become healthy within 120s"
+              if [ "$i" -eq 60 ]; then
+                echo "ERROR: Keycloak did not become healthy within 300s"
                 docker ps --filter "name=keycloak" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+                docker logs keycloak --tail 20
                 exit 1
               fi
-              echo "  Attempt $i/24: status=$STATUS"
+              echo "  Attempt $i/60: status=$STATUS"
               sleep 5
             done
 
