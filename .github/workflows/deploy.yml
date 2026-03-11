@@ -10,36 +10,33 @@ jobs:
     environment: production
 
     steps:
+      - uses: actions/checkout@v6
+
+      - name: Copy compose file to VPS
+        uses: appleboy/scp-action@v1.0.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          source: "docker-compose.yml"
+          target: "/opt/keycloak"
+          timeout: 60s
+
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.2.5
         env:
-          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
           KEYCLOAK_ADMIN: ${{ secrets.KEYCLOAK_ADMIN }}
           KEYCLOAK_ADMIN_PASSWORD: ${{ secrets.KEYCLOAK_ADMIN_PASSWORD }}
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          envs: GHCR_TOKEN,KEYCLOAK_ADMIN,KEYCLOAK_ADMIN_PASSWORD
+          envs: KEYCLOAK_ADMIN,KEYCLOAK_ADMIN_PASSWORD
           script: |
             set -euo pipefail
+            cd /opt/keycloak
 
-            REPO_URL="https://${GHCR_TOKEN}@github.com/JanKrajewskiIT/keycloak.git"
-            DEPLOY_DIR="/opt/keycloak"
-
-            # Clone or pull the repo
-            if [ -d "${DEPLOY_DIR}/.git" ]; then
-              cd "${DEPLOY_DIR}"
-              git remote set-url origin "${REPO_URL}"
-              git fetch origin main
-              git reset --hard origin/main
-            else
-              rm -rf "${DEPLOY_DIR}"
-              git clone --depth 1 --branch main "${REPO_URL}" "${DEPLOY_DIR}"
-              cd "${DEPLOY_DIR}"
-            fi
-
-            # Create .env (not tracked in git)
+            # Create .env
             cat > .env <<EOF
             KEYCLOAK_ADMIN=${KEYCLOAK_ADMIN}
             KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD}
@@ -52,17 +49,36 @@ jobs:
             docker compose pull
             docker compose up -d --remove-orphans
 
-            # Wait for health check
+            # Cleanup
+            docker image prune -f
+            docker compose ps
+
+      - name: Smoke test
+        uses: appleboy/ssh-action@v1.2.5
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            set -euo pipefail
+
             echo "Waiting for Keycloak to become healthy..."
-            for i in $(seq 1 30); do
+            for i in $(seq 1 24); do
               STATUS=$(docker inspect --format='{{.State.Health.Status}}' keycloak 2>/dev/null || echo "starting")
               if [ "$STATUS" = "healthy" ]; then
                 echo "Keycloak is healthy."
                 break
               fi
-              echo "  Attempt $i/30: status=$STATUS"
-              sleep 10
+              if [ "$i" -eq 24 ]; then
+                echo "ERROR: Keycloak did not become healthy within 120s"
+                docker ps --filter "name=keycloak" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+                exit 1
+              fi
+              echo "  Attempt $i/24: status=$STATUS"
+              sleep 5
             done
 
-            echo "Keycloak deployed successfully."
-            docker compose ps
+            echo "Checking HTTPS endpoint via Traefik..."
+            curl -sf --retry 3 --retry-delay 5 --max-time 10 https://auth.bluebraces.online/health/ready > /dev/null && echo "Keycloak: OK" || { echo "ERROR: Keycloak not reachable via HTTPS"; exit 1; }
+
+            echo "Smoke test completed."
