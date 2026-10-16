@@ -1,5 +1,5 @@
 # Keycloak
 
-Shared Keycloak identity provider for BluesBraces projects.
+Shared identity provider configuration for the project ecosystem.
 
-Documentation: [Recron Docs → External → Keycloak](https://docs.bluebraces.online/external/keycloak/)
+Documentation: [Recron project docs](https://docs.bluebraces.online/projects/keycloak/).
