@@ -3,6 +3,11 @@ name: Deploy Keycloak
 on:
   push:
     branches: [main]
+    paths:
+      - .github/workflows/deploy.yml
+      - docker-compose.yml
+      - realms/*.json
+      - themes/**
 
 jobs:
   deploy:
